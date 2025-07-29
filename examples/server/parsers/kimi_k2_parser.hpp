@@ -158,6 +158,110 @@ static json parse_token_function_calls(const std::string& text) {
     return tool_calls;
 }
 
+// Parse standalone XML invoke calls: <invoke name="..."><parameter name="..." >...</parameter></invoke>
+static json parse_standalone_xml_function_calls(const std::string& text) {
+    json tool_calls = json::array();
+    
+    try {
+        size_t pos = 0;
+        while ((pos = text.find(XML_INVOKE_OPEN_PREFIX, pos)) != std::string::npos) {
+            size_t invoke_start = pos;
+            
+            // Extract function name from invoke tag
+            // Find the opening quote after "name="
+            size_t quote_start = text.find("\"", invoke_start + strlen(XML_INVOKE_OPEN_PREFIX) - 1);
+            if (quote_start == std::string::npos) {
+                pos = invoke_start + strlen(XML_INVOKE_OPEN_PREFIX);
+                continue;
+            }
+            
+            // Find the closing quote  
+            size_t quote_end = text.find("\"", quote_start + 1);
+            if (quote_end == std::string::npos) {
+                pos = invoke_start + strlen(XML_INVOKE_OPEN_PREFIX);
+                continue;
+            }
+            
+            // Extract function name between quotes
+            std::string func_name = text.substr(quote_start + 1, quote_end - quote_start - 1);
+            if (func_name.empty()) {
+                pos = invoke_start + strlen(XML_INVOKE_OPEN_PREFIX);
+                continue;
+            }
+            
+            // Look for closing > of invoke tag
+            size_t invoke_close = text.find(">", quote_end);
+            if (invoke_close == std::string::npos) {
+                pos = invoke_start + strlen(XML_INVOKE_OPEN_PREFIX);
+                continue;
+            }
+            
+            // Find </invoke>
+            size_t invoke_end = text.find(XML_INVOKE_CLOSE, invoke_close);
+            if (invoke_end == std::string::npos) {
+                pos = invoke_start + strlen(XML_INVOKE_OPEN_PREFIX);
+                continue;
+            }
+            
+            // Extract parameters section between > and </invoke>
+            std::string params_section = text.substr(invoke_close + 1, invoke_end - invoke_close - 1);
+            
+            // Parse parameters and build JSON arguments
+            json args = json::object();
+            size_t param_pos = 0;
+            while ((param_pos = params_section.find(XML_PARAMETER_OPEN_PREFIX, param_pos)) != std::string::npos) {
+                // Find the opening quote after "name="
+                size_t param_quote_start = params_section.find("\"", param_pos);
+                if (param_quote_start == std::string::npos) break;
+                
+                // Find the closing quote
+                size_t param_quote_end = params_section.find("\"", param_quote_start + 1);
+                if (param_quote_end == std::string::npos) break;
+                
+                std::string param_name = params_section.substr(param_quote_start + 1, param_quote_end - param_quote_start - 1);
+                
+                size_t param_content_start = params_section.find(">", param_quote_end);
+                if (param_content_start == std::string::npos) break;
+                param_content_start++;
+                
+                size_t param_content_end = params_section.find(XML_PARAMETER_CLOSE, param_content_start);
+                if (param_content_end == std::string::npos) break;
+                
+                std::string param_value = params_section.substr(param_content_start, param_content_end - param_content_start);
+                
+                // Clean up parameter value (trim whitespace)
+                param_value.erase(0, param_value.find_first_not_of(" \t\n\r"));
+                param_value.erase(param_value.find_last_not_of(" \t\n\r") + 1);
+                
+                args[param_name] = param_value;
+                param_pos = param_content_end + XML_PARAMETER_CLOSE_LEN;
+            }
+            
+            // Generate tool call ID
+            static int standalone_xml_call_counter = 0;
+            std::string tool_id = "call_standalone_xml_" + std::to_string(++standalone_xml_call_counter);
+            
+            // Create tool call object
+            json tool_call = {
+                {"id", tool_id},
+                {"type", "function"},
+                {"function", {
+                    {"name", func_name},
+                    {"arguments", args.dump()}
+                }}
+            };
+            
+            tool_calls.push_back(tool_call);
+            pos = invoke_end + strlen(XML_INVOKE_CLOSE);
+        }
+    } catch (const std::exception&) {
+        // Return empty array on any parsing error
+        return json::array();
+    }
+    
+    return tool_calls;
+}
+
 // Parse XML-style function calls: <tool_call><invoke name="..."><parameter name="..." >...</parameter></invoke></tool_call>
 static json parse_xml_function_calls(const std::string& text) {
     json tool_calls = json::array();
@@ -398,12 +502,17 @@ static json parse_tool_calls(const std::string& text) {
                 result.push_back(call);
             }
         } else {
-            // No token format, try both XML and simple formats
-            json xml_calls = parse_xml_function_calls(text);
+            // No token format, try XML formats first (prioritized for Kimi-K2), then simple format
+            // Try standalone XML first (handles <invoke> without <tool_call> wrapper)
+            json standalone_xml_calls = parse_standalone_xml_function_calls(text);
+            json wrapped_xml_calls = parse_xml_function_calls(text);
             json simple_calls = parse_simple_function_calls(text);
             
-            // Combine results (XML takes precedence if both exist)
-            result = xml_calls;
+            // Combine results (standalone XML > wrapped XML > simple format)
+            result = standalone_xml_calls;
+            for (const auto& call : wrapped_xml_calls) {
+                result.push_back(call);
+            }
             for (const auto& call : simple_calls) {
                 result.push_back(call);
             }

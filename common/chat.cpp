@@ -86,15 +86,15 @@ static void common_chat_parse_generic(common_chat_msg_parser & builder) {
     };
     auto data = builder.consume_json_with_dumped_args(args_paths, content_paths);
     if (data.value.contains("tool_calls")) {
-        if (!builder.add_tool_calls(data.value.at("tool_calls")) || data.is_partial) {
+        if (!builder.add_tool_calls(data.value["tool_calls"]) || data.is_partial) {
             throw common_chat_msg_partial_exception("incomplete tool calls");
         }
     } else if (data.value.contains("tool_call")) {
-        if (!builder.add_tool_call(data.value.at("tool_call")) || data.is_partial) {
+        if (!builder.add_tool_call(data.value["tool_call"]) || data.is_partial) {
             throw common_chat_msg_partial_exception("incomplete tool call");
         }
     } else if (data.value.contains("response")) {
-        const auto & response = data.value.at("response");
+        const auto & response = data.value["response"];
         builder.add_content(response.is_string() ? response.template get<std::string>() : response.dump(2));
         if (data.is_partial) {
             throw common_chat_msg_partial_exception("incomplete response");
@@ -284,7 +284,6 @@ void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
 static void parse_deepseek_r1_tools_array(common_chat_msg_parser & builder) {
     static const common_regex prefix("function\n```json\n");
     
-    
     if (auto res = builder.try_find_regex(prefix)) {
         // Parse JSON and manually process tools array to convert arguments to strings
         auto json_result = builder.try_consume_json();
@@ -292,25 +291,28 @@ static void parse_deepseek_r1_tools_array(common_chat_msg_parser & builder) {
             throw common_chat_msg_partial_exception("invalid JSON");
         }
         
-        
         // DeepSeek R1 format has "tools" array, manually process each tool
-        if (json_result->json.contains("tools") && json_result->json.at("tools").is_array()) {
-            
-            // Manually create tool calls array with string arguments (following original pattern)
-            json tools_with_dumped_args = json::array();
-            for (const auto& tool : json_result->json.at("tools")) {
-                if (tool.contains("name") && tool.contains("arguments")) {
-                    json formatted_tool;
-                    formatted_tool["name"] = tool.at("name");
-                    // Convert arguments object to string (this is what consume_json_with_dumped_args does)
-                    formatted_tool["arguments"] = tool.at("arguments").dump();
-                    tools_with_dumped_args.push_back(formatted_tool);
+        if (json_result->json.contains("tools")) {
+            const auto& tools = json_result->json["tools"];
+            if (tools.is_array()) {
+                
+                // Manually create tool calls array with string arguments (following original pattern)
+                json tools_with_dumped_args = json::array();
+                for (const auto& tool : tools) {
+                    if (tool.contains("name") && tool.contains("arguments")) {
+                        json formatted_tool;
+                        formatted_tool["name"] = tool["name"];
+                        // Convert arguments object to string (this is what consume_json_with_dumped_args does)
+                        formatted_tool["arguments"] = tool["arguments"].dump();
+                        tools_with_dumped_args.push_back(formatted_tool);
+                    }
                 }
-            }
-            
-            
-            if (!builder.add_tool_calls(tools_with_dumped_args) || !json_result->healing_marker.marker.empty()) {
-                throw common_chat_msg_partial_exception("incomplete tool call array");
+                
+                if (!builder.add_tool_calls(tools_with_dumped_args) || !json_result->healing_marker.marker.empty()) {
+                    throw common_chat_msg_partial_exception("incomplete tool call array");
+                }
+            } else {
+                throw common_chat_msg_partial_exception("tools field is not an array");
             }
         } else {
             throw common_chat_msg_partial_exception("tools key not found or not array");
@@ -344,7 +346,6 @@ static void parse_deepseek_r1_xml_wrapped(common_chat_msg_parser & builder) {
             throw common_chat_msg_partial_exception("invalid JSON in XML wrapper");
         }
         
-        
         // Create single tool call following original pattern
         json tool_call;
         tool_call["name"] = function_name;
@@ -352,7 +353,6 @@ static void parse_deepseek_r1_xml_wrapped(common_chat_msg_parser & builder) {
         
         json tool_calls_array = json::array();
         tool_calls_array.push_back(tool_call);
-        
         
         if (!builder.add_tool_calls(tool_calls_array) || !json_result->healing_marker.marker.empty()) {
             throw common_chat_msg_partial_exception("incomplete XML wrapped tool call");
