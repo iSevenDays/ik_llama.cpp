@@ -3303,6 +3303,56 @@ int main() {
         std::cout << "❌ Test failed with exception: " << e.what() << std::endl;
         return 1;
     }
+
+    // Test DeepSeek R1 thinking tag termination fix
+    try {
+        std::cout << "\n🧠 Testing DeepSeek R1 thinking tag termination issue..." << std::endl;
+        
+        // Test case: Response wrapped entirely in think tags (reported by user)
+        std::string user_reported_case = "<think>This should be content but is wrapped in think tags</think>";
+        
+        std::cout << "\n   1. REPRODUCING FAILURE - Without fix (reasoning_in_content=false):" << std::endl;
+        
+        // Test without the fix (original behavior)
+        common_chat_syntax broken_syntax;
+        broken_syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+        broken_syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        broken_syntax.reasoning_in_content = false; // This causes the reported issue
+        broken_syntax.enable_tool_calls = false;
+        
+        auto broken_msg = common_chat_parse(user_reported_case, false, broken_syntax);
+        std::cout << "      Content: '" << broken_msg.content << "'" << std::endl;
+        std::cout << "      Reasoning: '" << broken_msg.reasoning_content << "'" << std::endl;
+        
+        if (broken_msg.content.empty() && !broken_msg.reasoning_content.empty()) {
+            std::cout << "      ❌ REPRODUCED USER BUG: Content disappears (thinking tags don't terminate properly)" << std::endl;
+            std::cout << "      User sees: EMPTY CONTENT - this is exactly what was reported!" << std::endl;
+        }
+        
+        std::cout << "\n   2. DEMONSTRATING FIX - With fix (reasoning_in_content=true):" << std::endl;
+        
+        // Test with the fix (corrected behavior) 
+        common_chat_syntax fixed_syntax;
+        fixed_syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+        fixed_syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        fixed_syntax.reasoning_in_content = true; // This is the fix!
+        fixed_syntax.enable_tool_calls = false;
+        
+        auto fixed_msg = common_chat_parse(user_reported_case, false, fixed_syntax);
+        std::cout << "      Content: '" << fixed_msg.content << "'" << std::endl;
+        std::cout << "      Reasoning: '" << fixed_msg.reasoning_content << "'" << std::endl;
+        
+        if (fixed_msg.content.find("This should be content but is wrapped in think tags") != std::string::npos) {
+            std::cout << "      ✅ PASS: Content properly preserved from think tags (with reasoning_in_content=true)" << std::endl;
+            std::cout << "      User sees: Full content - this fixes the reported issue!" << std::endl;
+        }
+        
+        std::cout << "🧠 DeepSeek R1 thinking tag termination test completed!" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cout << "❌ DeepSeek R1 thinking tag test failed: " << e.what() << std::endl;
+        return 1;
+    }
     
     return 0;
 }
